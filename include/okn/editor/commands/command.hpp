@@ -1,9 +1,16 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_COMMAND_HPP
-#define OKN_EDITOR_COMMAND_HPP
+#include <string>
+#include <memory>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_COMMAND_HPP
+class ICommand {
+public:
+    virtual ~ICommand() = default;
+    virtual auto execute() -> void = 0;
+    virtual auto undo() -> void = 0;
+    virtual auto description() const -> const std::string& = 0;
+};
+
+} // namespace okn::editor

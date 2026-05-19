@@ -1,9 +1,34 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_AUDIO_BRIDGE_HPP
-#define OKN_EDITOR_AUDIO_BRIDGE_HPP
+#include <string>
+#include <vector>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_AUDIO_BRIDGE_HPP
+struct AudioClipInfo {
+    uint64_t id = 0;
+    std::string name;
+    std::string path;
+    double duration_sec = 0.0;
+    bool is_playing = false;
+};
+
+class AudioBridge {
+public:
+    AudioBridge();
+    ~AudioBridge();
+
+    auto initialize() -> bool;
+    auto shutdown() -> void;
+
+    [[nodiscard]] auto get_all_clips() const -> std::vector<AudioClipInfo>;
+    auto play_clip(uint64_t id) -> void;
+    auto stop_clip(uint64_t id) -> void;
+    auto set_master_volume(float vol) -> void;
+    [[nodiscard]] auto master_volume() const -> float;
+
+private:
+    void* pImpl_ = nullptr;
+};
+
+} // namespace okn::editor

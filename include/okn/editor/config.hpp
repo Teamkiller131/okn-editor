@@ -1,9 +1,18 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_CONFIG_HPP
-#define OKN_EDITOR_CONFIG_HPP
+#include <cstdint>
+#include <string>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_CONFIG_HPP
+inline constexpr auto kEditorVersion = "1.0.0";
+inline constexpr auto kEditorName    = "OmniKillerNexus Editor";
+inline constexpr auto kEditorOrg     = "OmniKillerNexus";
+
+inline constexpr uint32_t kMaxUndoSteps = 256;
+inline constexpr uint32_t kDefaultViewportFPS = 60;
+inline constexpr uint32_t kConsoleMaxLines = 10000;
+
+inline constexpr auto kProjectFileExtension = ".oknproj";
+
+} // namespace okn::editor

@@ -1,9 +1,31 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_NETWORK_BRIDGE_HPP
-#define OKN_EDITOR_NETWORK_BRIDGE_HPP
+#include <string>
+#include <cstdint>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_NETWORK_BRIDGE_HPP
+struct NetworkStats {
+    uint64_t bytes_sent = 0;
+    uint64_t bytes_received = 0;
+    uint32_t packets_lost = 0;
+    uint32_t latency_ms = 0;
+    uint32_t connections = 0;
+};
+
+class NetworkBridge {
+public:
+    NetworkBridge();
+    ~NetworkBridge();
+
+    auto initialize() -> bool;
+    auto shutdown() -> void;
+
+    [[nodiscard]] auto get_stats() const -> NetworkStats;
+    auto set_enabled(bool enabled) -> void;
+
+private:
+    void* pImpl_ = nullptr;
+};
+
+} // namespace okn::editor

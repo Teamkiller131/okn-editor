@@ -1,0 +1,32 @@
+{
+	"BUILD_DIR" : "D:/OmniKillerNexus/modules/okn-editor/build/okn-editor-app_autogen",
+	"CMAKE_BINARY_DIR" : "D:/OmniKillerNexus/modules/okn-editor/build",
+	"CMAKE_CURRENT_BINARY_DIR" : "D:/OmniKillerNexus/modules/okn-editor/build",
+	"CMAKE_CURRENT_SOURCE_DIR" : "D:/OmniKillerNexus/modules/okn-editor",
+	"CMAKE_SOURCE_DIR" : "D:/OmniKillerNexus/modules/okn-editor",
+	"CROSS_CONFIG" : false,
+	"GENERATOR" : "Ninja",
+	"INCLUDE_DIR" : "D:/OmniKillerNexus/modules/okn-editor/build/okn-editor-app_autogen/include",
+	"INPUTS" : 
+	[
+		"D:/OmniKillerNexus/modules/okn-editor/resources/InspectorPanel.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/HierarchyPanel.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/AssetBrowserPanel.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/ConsolePanel.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/ProfilerPanel.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/MainWindow.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/main.qml",
+		"D:/OmniKillerNexus/modules/okn-editor/resources/ViewportPanel.qml"
+	],
+	"LOCK_FILE" : "D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor-app_autogen.dir/AutoRcc_qml_3YJK5W5UP7_Lock.lock",
+	"MULTI_CONFIG" : false,
+	"OPTIONS" : [ "-name", "qml" ],
+	"OUTPUT_CHECKSUM" : "3YJK5W5UP7",
+	"OUTPUT_NAME" : "qrc_qml.cpp",
+	"RCC_EXECUTABLE" : "D:/vcpkg/installed/x64-windows/tools/Qt6/bin/rcc.exe",
+	"RCC_LIST_OPTIONS" : [ "--list" ],
+	"SETTINGS_FILE" : "D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor-app_autogen.dir/AutoRcc_qml_3YJK5W5UP7_Used.txt",
+	"SOURCE" : "D:/OmniKillerNexus/modules/okn-editor/resources/qml.qrc",
+	"USE_BETTER_GRAPH" : true,
+	"VERBOSITY" : 0
+}

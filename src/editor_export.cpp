@@ -1,4 +1,1 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
-
-// editor_export.cpp
+﻿#include <okn/editor/editor_export.hpp>

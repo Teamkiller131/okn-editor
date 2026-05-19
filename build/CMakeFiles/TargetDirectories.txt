@@ -1,0 +1,8 @@
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor-app.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/edit_cache.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/rebuild_cache.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor_autogen_timestamp_deps.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor_autogen.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor-app_autogen_timestamp_deps.dir
+D:/OmniKillerNexus/modules/okn-editor/build/CMakeFiles/okn-editor-app_autogen.dir

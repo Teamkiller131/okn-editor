@@ -1,9 +1,9 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_UNDO_STACK_HPP
-#define OKN_EDITOR_UNDO_STACK_HPP
+#include <okn/editor/commands/history.hpp>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_UNDO_STACK_HPP
+using UndoStack = CommandHistory;
+
+} // namespace okn::editor

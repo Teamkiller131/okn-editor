@@ -1,0 +1,5 @@
+set(__QT_DEPLOY_TARGET_okn-editor_FILE D:/OmniKillerNexus/modules/okn-editor/build/okn-editor.lib)
+set(__QT_DEPLOY_TARGET_okn-editor_TYPE STATIC_LIBRARY)
+set(__QT_DEPLOY_TARGET_okn-editor-app_FILE D:/OmniKillerNexus/modules/okn-editor/build/okn-editor-app.exe)
+set(__QT_DEPLOY_TARGET_okn-editor-app_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_okn-editor-app_RUNTIME_DLLS D:/vcpkg/installed/x64-windows/debug/bin/Qt6QuickControls2d.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6QuickTemplates2d.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6Quickd.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6QmlMetad.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6QmlWorkerScriptd.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6OpenGLd.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6Guid.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6QmlModelsd.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6Qmld.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6Networkd.dll;D:/vcpkg/installed/x64-windows/debug/bin/Qt6Cored.dll)

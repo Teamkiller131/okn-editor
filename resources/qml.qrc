@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/okn/editor/qml">
+        <file>main.qml</file>
+        <file>MainWindow.qml</file>
+        <file>ViewportPanel.qml</file>
+        <file>HierarchyPanel.qml</file>
+        <file>InspectorPanel.qml</file>
+        <file>AssetBrowserPanel.qml</file>
+        <file>ConsolePanel.qml</file>
+        <file>ProfilerPanel.qml</file>
+    </qresource>
+</RCC>

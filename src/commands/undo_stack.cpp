@@ -1,4 +1,1 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
-
-// undo_stack.cpp
+﻿#include <okn/editor/commands/undo_stack.hpp>

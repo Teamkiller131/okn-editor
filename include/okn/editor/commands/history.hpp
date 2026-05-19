@@ -1,9 +1,27 @@
-﻿// Created by Teamkiller on 2025/12/23.
-//
+﻿#pragma once
 
-#ifndef OKN_EDITOR_HISTORY_HPP
-#define OKN_EDITOR_HISTORY_HPP
+#include <vector>
+#include <memory>
+#include <okn/editor/commands/command.hpp>
 
-#pragma once
+namespace okn::editor {
 
-#endif //OKN_EDITOR_HISTORY_HPP
+class CommandHistory {
+public:
+    CommandHistory() = default;
+    ~CommandHistory() = default;
+
+    auto push(std::unique_ptr<ICommand> cmd) -> void;
+    auto undo() -> void;
+    auto redo() -> void;
+    [[nodiscard]] auto can_undo() const -> bool;
+    [[nodiscard]] auto can_redo() const -> bool;
+    auto clear() -> void;
+    [[nodiscard]] auto size() const -> size_t;
+
+private:
+    std::vector<std::unique_ptr<ICommand>> done_;
+    std::vector<std::unique_ptr<ICommand>> undone_;
+};
+
+} // namespace okn::editor
