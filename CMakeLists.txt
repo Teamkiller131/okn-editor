@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-option(BUILD_SAMPLES "Build samples" ON)
+option(BUILD_SAMPLES "Build samples" OFF)
 option(BUILD_TESTS   "Build tests"   ON)
 
 # Feature toggles
