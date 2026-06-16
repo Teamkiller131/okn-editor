@@ -13,6 +13,7 @@
 #include <okn/render/slice/lua_slice.hpp>
 #include <okn/render/slice/slice_components.hpp>
 #include <okn/render/sprite2d/sprite_batch.hpp>
+#include <okn/math/algebra/quat.hpp>
 #endif
 
 namespace okn::editor {
@@ -65,10 +66,18 @@ void load_scene() {
         g_state.slice->load_string(kDefaultScene);
         g_state.status = "loaded embedded default scene";
     }
+    // Select the player by default so the Inspector is populated.
+    g_state.selected = g_state.slice->world().player();
+    g_state.has_selection = g_state.selected.is_valid();
 }
 
-void step_scene() {
+void tick_scene() {
     if (!g_state.slice) { return; }
+    // Live content iteration: re-run slice_scene.lua when it changes on disk.
+    if (g_state.slice->check_hot_reload()) {
+        g_state.has_selection = false;
+        g_state.status = "hot-reloaded slice_scene.lua";
+    }
     if (g_state.playing || g_state.step_once) {
         float dt = ImGui::GetIO().DeltaTime;
         dt = std::clamp(dt, 0.0f, 1.0f / 30.0f);
@@ -100,32 +109,51 @@ void draw_hierarchy() {
     ImGui::End();
 }
 
+auto to_u8(float v) -> std::uint8_t {
+    return static_cast<std::uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
 void draw_inspector() {
     ImGui::Begin("Inspector");
     if (g_state.has_selection && g_state.slice) {
         auto& w = g_state.slice->world().ecs();
+        auto* t = w.get_component<Transform2D>(g_state.selected);
+        auto* s = w.get_component<SpriteComp>(g_state.selected);
+        auto* b = w.get_component<BodyComp>(g_state.selected);
+
         ImGui::Text("Entity %u (gen %u)", g_state.selected.index(), g_state.selected.generation());
         ImGui::Separator();
-        if (auto* t = w.get_component<Transform2D>(g_state.selected)) {
+
+        bool xform_changed = false;
+        if (t != nullptr) {
             ImGui::SeparatorText("Transform2D");
-            ImGui::Text("position   %8.2f , %8.2f", static_cast<double>(t->position.x),
-                        static_cast<double>(t->position.y));
-            ImGui::Text("rotation   %8.3f rad", static_cast<double>(t->rotation));
-            ImGui::Text("size       %8.2f x %8.2f", static_cast<double>(t->size.x),
-                        static_cast<double>(t->size.y));
+            xform_changed |= ImGui::DragFloat2("position", &t->position.x, 0.5f);
+            xform_changed |= ImGui::DragFloat("rotation", &t->rotation, 0.01f);
+            ImGui::DragFloat2("size", &t->size.x, 0.25f, 0.1f, 4000.0f);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(visual)");
         }
-        if (auto* s = w.get_component<SpriteComp>(g_state.selected)) {
+        if (s != nullptr) {
             ImGui::SeparatorText("Sprite");
             float col[4] = {static_cast<float>(s->color.r) / 255.0f,
                             static_cast<float>(s->color.g) / 255.0f,
                             static_cast<float>(s->color.b) / 255.0f,
                             static_cast<float>(s->color.a) / 255.0f};
-            ImGui::ColorEdit4("color", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoPicker);
+            if (ImGui::ColorEdit4("color", col, ImGuiColorEditFlags_NoInputs)) {
+                s->color = {to_u8(col[0]), to_u8(col[1]), to_u8(col[2]), to_u8(col[3])};
+            }
             ImGui::Text("texture_id %u", s->texture_id);
         }
-        if (auto* b = w.get_component<BodyComp>(g_state.selected)) {
+        if (b != nullptr) {
             ImGui::SeparatorText("Body");
             ImGui::Text("body_id    %u", b->body_id);
+        }
+
+        // Push transform edits to the physics body so they hold (and survive Play).
+        if (xform_changed && t != nullptr && b != nullptr && b->body_id != 0) {
+            const okn::math::Quat q = okn::math::Quat::from_axis_angle({0.0f, 0.0f, 1.0f}, t->rotation);
+            g_state.slice->world().physics().set_transform(
+                b->body_id, {t->position.x, t->position.y, 0.0f}, q);
         }
     } else {
         ImGui::TextDisabled("(select an entity in the Hierarchy)");
@@ -195,7 +223,7 @@ void draw_viewport() {
 
 void draw_console() {
     ImGui::Begin("Console");
-    ImGui::Text("OmniKillerNexus Editor — P2 (live scene viewport).");
+    ImGui::Text("OmniKillerNexus Editor — P3 (edit components + hot-reload Lua).");
     ImGui::Text("scene: %s   entities: %d", g_state.status.c_str(), g_state.entity_count);
     if (g_state.slice) {
         ImGui::Text("state: %s   landings: %.0f", g_state.playing ? "PLAYING" : "paused",
@@ -268,7 +296,7 @@ void draw_dock_host() {
 
 void draw_frame() {
 #if defined(OKN_EDITOR_HAS_SCENE)
-    step_scene();
+    tick_scene();
 #endif
     draw_dock_host();
 
