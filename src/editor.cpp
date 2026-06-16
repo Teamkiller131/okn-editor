@@ -14,6 +14,12 @@
 #include <okn/render/slice/slice_components.hpp>
 #include <okn/render/sprite2d/sprite_batch.hpp>
 #include <okn/math/algebra/quat.hpp>
+#include <okn/physics/physics_types.hpp>
+#include <okn/physics/dynamics/body.hpp>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <vector>
 #endif
 
 namespace okn::editor {
@@ -21,6 +27,7 @@ namespace {
 
 #if defined(OKN_EDITOR_HAS_SCENE)
 using okn::render::slice::LuaSlice;
+using okn::render::slice::SliceWorld;
 using okn::render::slice::Transform2D;
 using okn::render::slice::SpriteComp;
 using okn::render::slice::BodyComp;
@@ -40,15 +47,54 @@ function on_land() land_count = land_count + 1 end
 function on_update(dt) end
 )LUA";
 
+// Serialize the live scene back to a Lua scene script. The entity kind is recovered
+// from the PlayerTag and the physics body type (static -> ground, dynamic -> box).
+std::string scene_to_lua(LuaSlice& slice) {
+    auto& world = slice.world();
+    auto& ecs = world.ecs();
+    auto& phys = world.physics();
+    std::string out = "-- Authored by the OmniKillerNexus editor.\nset_gravity(20)\n";
+    for (auto [e, t] : ecs.query<Transform2D>()) {
+        int r = 255, g = 255, b = 255;
+        if (auto* s = ecs.get_component<SpriteComp>(e)) {
+            r = s->color.r; g = s->color.g; b = s->color.b;
+        }
+        const char* fn = "spawn_box";
+        if (ecs.has_component<PlayerTag>(e)) {
+            fn = "spawn_player";
+        } else if (auto* bc = ecs.get_component<BodyComp>(e)) {
+            if (auto* rb = phys.get_body(bc->body_id)) {
+                if (rb->type == okn::physics::BodyType::kStatic) { fn = "spawn_ground"; }
+            }
+        }
+        char line[192];
+        std::snprintf(line, sizeof(line), "%s(%.1f, %.1f, %.1f, %.1f, %d, %d, %d)\n",
+                      fn, static_cast<double>(t->position.x), static_cast<double>(t->position.y),
+                      static_cast<double>(t->size.x), static_cast<double>(t->size.y), r, g, b);
+        out += line;
+    }
+    out += "land_count = 0\nfunction on_land() land_count = land_count + 1 end\n";
+    out += "function on_update(dt) end\n";
+    return out;
+}
+
+struct UndoEntry {
+    Entity entity{};
+    Transform2D xform{};
+    bool valid = false;
+};
+
 struct EditorState {
     std::unique_ptr<LuaSlice> slice;
     Entity selected{};
     bool has_selection = false;
     bool playing = false;
     bool step_once = false;
+    bool dragging = false;
+    Vec2 grab_offset{0.0f, 0.0f};
+    UndoEntry undo;
     std::string status = "no scene";
     int entity_count = 0;
-    // 2D viewport camera (world units).
     Vec2 cam_center{0.0f, -5.0f};
     float view_width = 560.0f;
 };
@@ -56,6 +102,11 @@ EditorState g_state;
 
 bool same_entity(Entity a, Entity b) {
     return a.index() == b.index() && a.generation() == b.generation();
+}
+
+void select_player() {
+    g_state.selected = g_state.slice->world().player();
+    g_state.has_selection = g_state.selected.is_valid();
 }
 
 void load_scene() {
@@ -66,17 +117,59 @@ void load_scene() {
         g_state.slice->load_string(kDefaultScene);
         g_state.status = "loaded embedded default scene";
     }
-    // Select the player by default so the Inspector is populated.
-    g_state.selected = g_state.slice->world().player();
-    g_state.has_selection = g_state.selected.is_valid();
+    select_player();
+    g_state.undo.valid = false;
+}
+
+void save_scene() {
+    if (!g_state.slice) { return; }
+    std::ofstream f("slice_scene.lua");
+    if (f) {
+        f << scene_to_lua(*g_state.slice);
+        g_state.status = "saved slice_scene.lua";
+    } else {
+        g_state.status = "save FAILED";
+    }
+}
+
+// Sync an entity's transform into its physics body (and freeze velocity for drags).
+void push_transform_to_body(Entity e, bool freeze_velocity) {
+    auto& world = g_state.slice->world();
+    auto* t = world.ecs().get_component<Transform2D>(e);
+    auto* b = world.ecs().get_component<BodyComp>(e);
+    if (t == nullptr || b == nullptr || b->body_id == 0) { return; }
+    const okn::math::Quat q = okn::math::Quat::from_axis_angle({0.0f, 0.0f, 1.0f}, t->rotation);
+    world.physics().set_transform(b->body_id, {t->position.x, t->position.y, 0.0f}, q);
+    if (freeze_velocity) {
+        world.physics().set_linear_velocity(b->body_id, {0.0f, 0.0f, 0.0f});
+    }
+}
+
+void record_undo(Entity e) {
+    if (auto* t = g_state.slice->world().ecs().get_component<Transform2D>(e)) {
+        g_state.undo = UndoEntry{e, *t, true};
+    }
+}
+
+void apply_undo() {
+    if (!g_state.undo.valid || !g_state.slice) { return; }
+    auto* t = g_state.slice->world().ecs().get_component<Transform2D>(g_state.undo.entity);
+    if (t != nullptr) {
+        *t = g_state.undo.xform;
+        push_transform_to_body(g_state.undo.entity, true);
+        g_state.selected = g_state.undo.entity;
+        g_state.has_selection = true;
+        g_state.status = "undo";
+    }
+    g_state.undo.valid = false;
 }
 
 void tick_scene() {
     if (!g_state.slice) { return; }
-    // Live content iteration: re-run slice_scene.lua when it changes on disk.
     if (g_state.slice->check_hot_reload()) {
         g_state.has_selection = false;
         g_state.status = "hot-reloaded slice_scene.lua";
+        select_player();
     }
     if (g_state.playing || g_state.step_once) {
         float dt = ImGui::GetIO().DeltaTime;
@@ -127,8 +220,10 @@ void draw_inspector() {
         bool xform_changed = false;
         if (t != nullptr) {
             ImGui::SeparatorText("Transform2D");
-            xform_changed |= ImGui::DragFloat2("position", &t->position.x, 0.5f);
-            xform_changed |= ImGui::DragFloat("rotation", &t->rotation, 0.01f);
+            if (ImGui::DragFloat2("position", &t->position.x, 0.5f)) { xform_changed = true; }
+            if (ImGui::IsItemActivated()) { record_undo(g_state.selected); }  // capture pre-edit
+            if (ImGui::DragFloat("rotation", &t->rotation, 0.01f)) { xform_changed = true; }
+            if (ImGui::IsItemActivated()) { record_undo(g_state.selected); }
             ImGui::DragFloat2("size", &t->size.x, 0.25f, 0.1f, 4000.0f);
             ImGui::SameLine();
             ImGui::TextDisabled("(visual)");
@@ -148,15 +243,9 @@ void draw_inspector() {
             ImGui::SeparatorText("Body");
             ImGui::Text("body_id    %u", b->body_id);
         }
-
-        // Push transform edits to the physics body so they hold (and survive Play).
-        if (xform_changed && t != nullptr && b != nullptr && b->body_id != 0) {
-            const okn::math::Quat q = okn::math::Quat::from_axis_angle({0.0f, 0.0f, 1.0f}, t->rotation);
-            g_state.slice->world().physics().set_transform(
-                b->body_id, {t->position.x, t->position.y, 0.0f}, q);
-        }
+        if (xform_changed) { push_transform_to_body(g_state.selected, false); }
     } else {
-        ImGui::TextDisabled("(select an entity in the Hierarchy)");
+        ImGui::TextDisabled("(select an entity in the Hierarchy or Viewport)");
     }
     ImGui::End();
 }
@@ -168,15 +257,17 @@ void draw_viewport() {
     ImGui::SameLine();
     if (ImGui::Button("Step")) { g_state.step_once = true; }
     ImGui::SameLine();
-    if (ImGui::Button("Reset")) { load_scene(); g_state.has_selection = false; }
+    if (ImGui::Button("Reset")) { load_scene(); }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::Button("Save")) { save_scene(); }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
     ImGui::SliderFloat("zoom", &g_state.view_width, 120.0f, 1200.0f, "%.0f u");
 
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (avail.x < 16.0f) { avail.x = 16.0f; }
-    if (avail.y < 16.0f) { avail.y = 16.0f; }
+    avail.x = std::max(avail.x, 16.0f);
+    avail.y = std::max(avail.y, 16.0f);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1{p0.x + avail.x, p0.y + avail.y};
@@ -187,10 +278,15 @@ void draw_viewport() {
     const Vec2 c = g_state.cam_center;
     auto to_screen = [&](Vec2 wp) -> ImVec2 {
         return ImVec2(p0.x + avail.x * 0.5f + (wp.x - c.x) * scale,
-                      p0.y + avail.y * 0.5f - (wp.y - c.y) * scale);  // +Y up
+                      p0.y + avail.y * 0.5f - (wp.y - c.y) * scale);
+    };
+    auto to_world = [&](ImVec2 sp) -> Vec2 {
+        return Vec2{c.x + (sp.x - (p0.x + avail.x * 0.5f)) / scale,
+                    c.y - (sp.y - (p0.y + avail.y * 0.5f)) / scale};
     };
 
     if (g_state.slice) {
+        auto& w = g_state.slice->world().ecs();
         const auto groups = g_state.slice->world().build_sprites().build();
         for (const auto& gr : groups) {
             for (std::size_t v = 0; v + 4 <= gr.vertices.size(); v += 4) {
@@ -203,9 +299,7 @@ void draw_viewport() {
                                   to_screen(d.pos), to_screen(e.pos), col);
             }
         }
-        // Outline the selected entity.
         if (g_state.has_selection) {
-            auto& w = g_state.slice->world().ecs();
             if (auto* t = w.get_component<Transform2D>(g_state.selected)) {
                 const float hw = t->size.x * 0.5f, hh = t->size.y * 0.5f;
                 const ImVec2 a = to_screen({t->position.x - hw, t->position.y - hh});
@@ -217,16 +311,78 @@ void draw_viewport() {
         }
     }
     dl->PopClipRect();
-    ImGui::Dummy(avail);   // reserve the drawn region
+
+    // Mouse interaction: click to pick, drag to move (a gizmo).
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::InvisibleButton("##viewport_canvas", avail, ImGuiButtonFlags_MouseButtonLeft);
+    if (g_state.slice && ImGui::IsItemHovered()) {
+        auto& w = g_state.slice->world().ecs();
+        const Vec2 wm = to_world(ImGui::GetIO().MousePos);
+        if (ImGui::IsMouseClicked(0)) {
+            Entity pick{};
+            bool found = false;
+            for (auto [e, t] : w.query<Transform2D>()) {
+                const float hw = t->size.x * 0.5f, hh = t->size.y * 0.5f;
+                if (wm.x >= t->position.x - hw && wm.x <= t->position.x + hw &&
+                    wm.y >= t->position.y - hh && wm.y <= t->position.y + hh) {
+                    pick = e;  // last hit = topmost (drawn later)
+                    found = true;
+                }
+            }
+            if (found) {
+                g_state.selected = pick;
+                g_state.has_selection = true;
+                g_state.dragging = true;
+                record_undo(pick);
+                if (auto* t = w.get_component<Transform2D>(pick)) {
+                    g_state.grab_offset = Vec2{wm.x - t->position.x, wm.y - t->position.y};
+                }
+            } else {
+                g_state.has_selection = false;
+            }
+        }
+    }
+    if (g_state.dragging && g_state.has_selection && ImGui::IsMouseDown(0)) {
+        auto& w = g_state.slice->world().ecs();
+        if (auto* t = w.get_component<Transform2D>(g_state.selected)) {
+            const Vec2 wm = to_world(ImGui::GetIO().MousePos);
+            t->position = Vec2{wm.x - g_state.grab_offset.x, wm.y - g_state.grab_offset.y};
+            push_transform_to_body(g_state.selected, true);
+        }
+    }
+    if (!ImGui::IsMouseDown(0)) { g_state.dragging = false; }
+
+    ImGui::End();
+}
+
+void draw_assets() {
+    ImGui::Begin("Assets");
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    bool any = false;
+    for (const auto& entry : fs::directory_iterator(fs::current_path(), ec)) {
+        if (entry.path().extension() == ".lua") {
+            any = true;
+            const std::string name = entry.path().filename().string();
+            if (ImGui::Selectable(name.c_str())) {
+                if (g_state.slice && g_state.slice->load_file(name)) {
+                    g_state.status = "loaded " + name;
+                    select_player();
+                }
+            }
+        }
+    }
+    if (!any) { ImGui::TextDisabled("(no .lua scenes found)"); }
     ImGui::End();
 }
 
 void draw_console() {
     ImGui::Begin("Console");
-    ImGui::Text("OmniKillerNexus Editor — P3 (edit components + hot-reload Lua).");
+    ImGui::Text("OmniKillerNexus Editor — P4 (gizmos, save, assets, undo).");
     ImGui::Text("scene: %s   entities: %d", g_state.status.c_str(), g_state.entity_count);
     if (g_state.slice) {
-        ImGui::Text("state: %s   landings: %.0f", g_state.playing ? "PLAYING" : "paused",
+        ImGui::Text("state: %s   landings: %.0f   |  drag in viewport to move; Ctrl+Z undo",
+                    g_state.playing ? "PLAYING" : "paused",
                     g_state.slice->get_number("land_count"));
     }
     ImGui::End();
@@ -268,10 +424,24 @@ void draw_dock_host() {
     ImGui::PopStyleVar(3);
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            ImGui::MenuItem("Open Scene…");
-            ImGui::MenuItem("Save");
-            ImGui::Separator();
-            ImGui::MenuItem("Exit");
+            if (ImGui::MenuItem("Save Scene")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                save_scene();
+#endif
+            }
+            if (ImGui::MenuItem("Reload Scene")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                load_scene();
+#endif
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit")) {
+            if (ImGui::MenuItem("Undo", "Ctrl+Z")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                apply_undo();
+#endif
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -297,6 +467,7 @@ void draw_dock_host() {
 void draw_frame() {
 #if defined(OKN_EDITOR_HAS_SCENE)
     tick_scene();
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) { apply_undo(); }
 #endif
     draw_dock_host();
 
@@ -304,9 +475,7 @@ void draw_frame() {
     draw_hierarchy();
     draw_inspector();
     draw_viewport();
-    ImGui::Begin("Assets");
-    ImGui::TextDisabled("slice_scene.lua");
-    ImGui::End();
+    draw_assets();
     draw_console();
 #else
     ImGui::Begin("Hierarchy"); ImGui::TextDisabled("(scene support not built)"); ImGui::End();
@@ -331,6 +500,28 @@ int run_editor(int maxFrames) {
 #endif
     unigui::Run([] { draw_frame(); }, maxFrames);
     return 0;
+}
+
+int run_selftest() {
+#if defined(OKN_EDITOR_HAS_SCENE)
+    LuaSlice a;
+    if (!a.load_file("slice_scene.lua")) { a.load_string(kDefaultScene); }
+    const int before = static_cast<int>(a.world().build_sprites().sprite_count());
+
+    const std::string lua = scene_to_lua(a);
+    LuaSlice b;
+    if (!b.load_string(lua)) {
+        std::fprintf(stderr, "selftest: reload of serialized scene FAILED: %s\n",
+                     b.last_error().c_str());
+        return 1;
+    }
+    const int after = static_cast<int>(b.world().build_sprites().sprite_count());
+    std::fprintf(stderr, "selftest: serialize round-trip before=%d after=%d\n", before, after);
+    return (before > 0 && before == after) ? 0 : 1;
+#else
+    std::fprintf(stderr, "selftest: scene support not built\n");
+    return 0;
+#endif
 }
 
 }  // namespace okn::editor

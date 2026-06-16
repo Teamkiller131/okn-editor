@@ -9,4 +9,8 @@ namespace okn::editor {
 // 0 runs until the window is closed. Returns 0 on success, 1 if init failed.
 int run_editor(int maxFrames = 0);
 
+// Headless: load the scene, serialize it back to Lua, reload that, and verify the
+// entity count round-trips. No window. Returns 0 on success, 1 on failure.
+int run_selftest();
+
 } // namespace okn::editor
