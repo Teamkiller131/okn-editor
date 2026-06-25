@@ -393,6 +393,32 @@ void draw_viewport() {
                     c.y - (sp.y - (p0.y + avail.y * 0.5f)) / scale};
     };
 
+    // World grid + brighter origin axes, so positions are readable while editing.
+    {
+        constexpr float step = 20.0f;
+        auto absf = [](float v) { return v < 0.0f ? -v : v; };
+        const float half_w = g_state.view_width * 0.5f;
+        const float half_h = half_w * (avail.y / avail.x);
+        const int xi0 = static_cast<int>((c.x - half_w) / step) - 1;
+        const int xi1 = static_cast<int>((c.x + half_w) / step) + 1;
+        for (int xi = xi0; xi <= xi1; ++xi) {
+            const float x = static_cast<float>(xi) * step;
+            const bool axis = absf(x) < 0.01f;
+            dl->AddLine(to_screen({x, c.y - half_h}), to_screen({x, c.y + half_h}),
+                        axis ? IM_COL32(92, 94, 124, 200) : IM_COL32(44, 46, 58, 150),
+                        axis ? 1.5f : 1.0f);
+        }
+        const int yi0 = static_cast<int>((c.y - half_h) / step) - 1;
+        const int yi1 = static_cast<int>((c.y + half_h) / step) + 1;
+        for (int yi = yi0; yi <= yi1; ++yi) {
+            const float y = static_cast<float>(yi) * step;
+            const bool axis = absf(y) < 0.01f;
+            dl->AddLine(to_screen({c.x - half_w, y}), to_screen({c.x + half_w, y}),
+                        axis ? IM_COL32(92, 94, 124, 200) : IM_COL32(44, 46, 58, 150),
+                        axis ? 1.5f : 1.0f);
+        }
+    }
+
     if (g_state.slice) {
         auto& w = g_state.slice->world().ecs();
         const auto groups = g_state.slice->world().build_sprites().build();
