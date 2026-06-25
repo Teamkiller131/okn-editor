@@ -81,7 +81,9 @@ std::string scene_to_lua(LuaSlice& slice) {
 struct UndoEntry {
     Entity entity{};
     Transform2D xform{};
-    bool valid = false;
+    SpriteComp sprite{};
+    bool has_xform = false;
+    bool has_sprite = false;
 };
 
 struct EditorState {
@@ -147,26 +149,47 @@ void push_transform_to_body(Entity e, bool freeze_velocity) {
     }
 }
 
-// Snapshot an entity's transform BEFORE it is edited; a fresh edit invalidates the
-// redo stack (the classic undo/redo contract).
+// Capture an entity's editable component state for undo (transform + sprite).
+UndoEntry snapshot_entity(Entity e) {
+    UndoEntry s;
+    s.entity = e;
+    auto& w = g_state.slice->world().ecs();
+    if (auto* t = w.get_component<Transform2D>(e)) { s.xform = *t; s.has_xform = true; }
+    if (auto* sp = w.get_component<SpriteComp>(e)) { s.sprite = *sp; s.has_sprite = true; }
+    return s;
+}
+
+// Restore a captured snapshot onto the live entity.
+void apply_snapshot(const UndoEntry& s) {
+    auto& w = g_state.slice->world().ecs();
+    if (s.has_xform) {
+        if (auto* t = w.get_component<Transform2D>(s.entity)) { *t = s.xform; }
+        push_transform_to_body(s.entity, true);
+    }
+    if (s.has_sprite) {
+        if (auto* sp = w.get_component<SpriteComp>(s.entity)) { *sp = s.sprite; }
+    }
+}
+
+// Snapshot an entity BEFORE it is edited; a fresh edit invalidates the redo stack
+// (the classic undo/redo contract). Covers transform AND sprite edits.
 void record_undo(Entity e) {
-    if (auto* t = g_state.slice->world().ecs().get_component<Transform2D>(e)) {
-        g_state.undo_stack.push_back(UndoEntry{e, *t, true});
+    if (!g_state.slice) { return; }
+    UndoEntry s = snapshot_entity(e);
+    if (s.has_xform || s.has_sprite) {
+        g_state.undo_stack.push_back(s);
         g_state.redo_stack.clear();
     }
 }
 
-// Move the current transform onto `to` and restore the snapshot from `from`.
+// Move the current state onto `to` and restore the snapshot from `from`.
 bool restore_from(std::vector<UndoEntry>& from, std::vector<UndoEntry>& to,
                   const char* label) {
     if (from.empty() || !g_state.slice) { return false; }
     const UndoEntry entry = from.back();
     from.pop_back();
-    auto* t = g_state.slice->world().ecs().get_component<Transform2D>(entry.entity);
-    if (t == nullptr) { return false; }
-    to.push_back(UndoEntry{entry.entity, *t, true});   // current state -> the other stack
-    *t = entry.xform;                                  // restore the snapshot
-    push_transform_to_body(entry.entity, true);
+    to.push_back(snapshot_entity(entry.entity));   // current state -> the other stack
+    apply_snapshot(entry);                          // restore the snapshot
     g_state.selected = entry.entity;
     g_state.has_selection = true;
     g_state.status = label;
@@ -237,6 +260,7 @@ void draw_inspector() {
             if (ImGui::DragFloat("rotation", &t->rotation, 0.01f)) { xform_changed = true; }
             if (ImGui::IsItemActivated()) { record_undo(g_state.selected); }
             ImGui::DragFloat2("size", &t->size.x, 0.25f, 0.1f, 4000.0f);
+            if (ImGui::IsItemActivated()) { record_undo(g_state.selected); }  // size is undoable too
             ImGui::SameLine();
             ImGui::TextDisabled("(visual)");
         }
@@ -249,6 +273,7 @@ void draw_inspector() {
             if (ImGui::ColorEdit4("color", col, ImGuiColorEditFlags_NoInputs)) {
                 s->color = {to_u8(col[0]), to_u8(col[1]), to_u8(col[2]), to_u8(col[3])};
             }
+            if (ImGui::IsItemActivated()) { record_undo(g_state.selected); }  // capture pre-edit color
             ImGui::Text("texture_id %u", s->texture_id);
         }
         if (b != nullptr) {
@@ -565,6 +590,21 @@ int run_selftest() {
         std::fprintf(stderr,
             "selftest: undo/redo base=%.2f undo1=%.2f undo2=%.2f redo1=%.2f %s\n",
             base, u1, u2, r1, undo_ok ? "OK" : "FAIL");
+
+        // Sprite color is now undoable too (the snapshot captures Transform + Sprite).
+        if (auto* sp = g_state.slice->world().ecs().get_component<SpriteComp>(e)) {
+            const std::uint8_t cr0 = sp->color.r;
+            record_undo(e);
+            sp->color.r = static_cast<std::uint8_t>(cr0 ^ 0xFFu);   // edit the color
+            const std::uint8_t cr1 = sp->color.r;
+            apply_undo();
+            auto* sp2 = g_state.slice->world().ecs().get_component<SpriteComp>(e);
+            const bool color_ok = sp2 != nullptr && sp2->color.r == cr0 && cr1 != cr0;
+            std::fprintf(stderr, "selftest: color undo r=%u->%u->%u %s\n",
+                         static_cast<unsigned>(cr0), static_cast<unsigned>(cr1),
+                         static_cast<unsigned>(sp2 ? sp2->color.r : 0), color_ok ? "OK" : "FAIL");
+            undo_ok = undo_ok && color_ok;
+        }
     } else {
         std::fprintf(stderr, "selftest: undo/redo SKIPPED (no scene/selection)\n");
     }
