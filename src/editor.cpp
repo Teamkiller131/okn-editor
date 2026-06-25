@@ -78,12 +78,17 @@ std::string scene_to_lua(LuaSlice& slice) {
     return out;
 }
 
+enum class UndoKind { Edit, Recreate, Delete };
+
 struct UndoEntry {
+    UndoKind kind = UndoKind::Edit;
     Entity entity{};
     Transform2D xform{};
     SpriteComp sprite{};
     bool has_xform = false;
     bool has_sprite = false;
+    bool dynamic = false;     // structural spawn: dynamic vs static body
+    bool is_player = false;   // structural spawn: re-add the player tag
 };
 
 struct EditorState {
@@ -171,6 +176,27 @@ void apply_snapshot(const UndoEntry& s) {
     }
 }
 
+// Capture an entity's full spawn parameters (components + body type) so it can be
+// recreated for structural undo.
+UndoEntry capture_spawn(Entity e) {
+    UndoEntry u = snapshot_entity(e);   // xform + sprite
+    auto& world = g_state.slice->world();
+    if (auto* bc = world.ecs().get_component<BodyComp>(e)) {
+        if (auto* b = world.physics().get_body(bc->body_id)) {
+            u.dynamic = (b->type == okn::physics::BodyType::kDynamic);
+        }
+    }
+    u.is_player = world.ecs().has_component<PlayerTag>(e);
+    return u;
+}
+
+// Recreate an entity (with a physics body) from captured spawn params.
+Entity editor_spawn(const UndoEntry& p) {
+    const Vec2 center = p.has_xform ? p.xform.position : Vec2{0.0f, 0.0f};
+    const Vec2 size = p.has_xform ? p.xform.size : Vec2{8.0f, 8.0f};
+    return g_state.slice->world().spawn_box(center, size, p.sprite.color, p.dynamic, p.is_player);
+}
+
 // Snapshot an entity BEFORE it is edited; a fresh edit invalidates the redo stack
 // (the classic undo/redo contract). Covers transform AND sprite edits.
 void record_undo(Entity e) {
@@ -182,22 +208,67 @@ void record_undo(Entity e) {
     }
 }
 
-// Move the current state onto `to` and restore the snapshot from `from`.
+// Pop one entry from `from`, apply it to the live scene, and push its inverse onto
+// `to`. Handles property edits and structural (recreate/delete) ops uniformly.
 bool restore_from(std::vector<UndoEntry>& from, std::vector<UndoEntry>& to,
                   const char* label) {
     if (from.empty() || !g_state.slice) { return false; }
     const UndoEntry entry = from.back();
     from.pop_back();
-    to.push_back(snapshot_entity(entry.entity));   // current state -> the other stack
-    apply_snapshot(entry);                          // restore the snapshot
-    g_state.selected = entry.entity;
-    g_state.has_selection = true;
+
+    if (entry.kind == UndoKind::Edit) {
+        to.push_back(snapshot_entity(entry.entity));   // current state -> the other stack
+        apply_snapshot(entry);
+        g_state.selected = entry.entity;
+        g_state.has_selection = true;
+    } else if (entry.kind == UndoKind::Recreate) {
+        UndoEntry inv = entry;                          // inverse of recreate is delete
+        inv.entity = editor_spawn(entry);
+        inv.kind = UndoKind::Delete;
+        to.push_back(inv);
+        g_state.selected = inv.entity;
+        g_state.has_selection = true;
+    } else {  // UndoKind::Delete
+        g_state.slice->world().despawn(entry.entity);
+        UndoEntry inv = entry;                          // inverse of delete is recreate
+        inv.kind = UndoKind::Recreate;
+        to.push_back(inv);
+        g_state.has_selection = false;
+    }
     g_state.status = label;
     return true;
 }
 
 void apply_undo() { restore_from(g_state.undo_stack, g_state.redo_stack, "undo"); }
 void apply_redo() { restore_from(g_state.redo_stack, g_state.undo_stack, "redo"); }
+
+// Delete the selected entity (undoable: its inverse recreates it).
+void delete_selected() {
+    if (!g_state.has_selection || !g_state.slice) { return; }
+    UndoEntry u = capture_spawn(g_state.selected);
+    u.kind = UndoKind::Recreate;            // to undo a delete, recreate it
+    g_state.slice->world().despawn(g_state.selected);
+    g_state.undo_stack.push_back(u);
+    g_state.redo_stack.clear();
+    g_state.has_selection = false;
+    g_state.status = "deleted entity";
+}
+
+// Duplicate the selected entity, offset so it's visible (undoable: inverse deletes).
+void duplicate_selected() {
+    if (!g_state.has_selection || !g_state.slice) { return; }
+    UndoEntry p = capture_spawn(g_state.selected);
+    p.is_player = false;                    // never clone the player tag
+    if (p.has_xform) { p.xform.position.x += 8.0f; p.xform.position.y += 8.0f; }
+    UndoEntry u = p;
+    u.entity = editor_spawn(p);
+    u.kind = UndoKind::Delete;              // to undo a create, delete it
+    g_state.undo_stack.push_back(u);
+    g_state.redo_stack.clear();
+    g_state.selected = u.entity;
+    g_state.has_selection = true;
+    g_state.status = "duplicated entity";
+}
 
 void tick_scene() {
     if (!g_state.slice) { return; }
@@ -484,6 +555,17 @@ void draw_dock_host() {
                 apply_redo();
 #endif
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                duplicate_selected();
+#endif
+            }
+            if (ImGui::MenuItem("Delete", "Del")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                delete_selected();
+#endif
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -511,6 +593,8 @@ void draw_frame() {
     tick_scene();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) { apply_undo(); }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) { apply_redo(); }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_D)) { duplicate_selected(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete)) { delete_selected(); }
 #endif
     draw_dock_host();
 
@@ -604,6 +688,25 @@ int run_selftest() {
                          static_cast<unsigned>(cr0), static_cast<unsigned>(cr1),
                          static_cast<unsigned>(sp2 ? sp2->color.r : 0), color_ok ? "OK" : "FAIL");
             undo_ok = undo_ok && color_ok;
+        }
+
+        // Structural undo: duplicate + delete change the entity count and are undoable.
+        {
+            auto count = [&]() -> int {
+                return static_cast<int>(g_state.slice->world().ecs().entity_count());
+            };
+            const int n0 = count();
+            duplicate_selected();  const int n1 = count();   // +1
+            apply_undo();          const int n2 = count();   // back to n0
+            apply_redo();          const int n3 = count();   // +1 again
+            delete_selected();     const int n4 = count();   // -1
+            apply_undo();          const int n5 = count();   // recreated -> +1
+            const bool struct_ok = (n1 == n0 + 1) && (n2 == n0) && (n3 == n0 + 1)
+                                && (n4 == n0) && (n5 == n0 + 1);
+            std::fprintf(stderr,
+                "selftest: struct undo n=%d dup=%d undo=%d redo=%d del=%d undo=%d %s\n",
+                n0, n1, n2, n3, n4, n5, struct_ok ? "OK" : "FAIL");
+            undo_ok = undo_ok && struct_ok;
         }
     } else {
         std::fprintf(stderr, "selftest: undo/redo SKIPPED (no scene/selection)\n");
