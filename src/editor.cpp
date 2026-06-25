@@ -92,7 +92,8 @@ struct EditorState {
     bool step_once = false;
     bool dragging = false;
     Vec2 grab_offset{0.0f, 0.0f};
-    UndoEntry undo;
+    std::vector<UndoEntry> undo_stack;   // multi-level: each holds a pre-edit transform
+    std::vector<UndoEntry> redo_stack;
     std::string status = "no scene";
     int entity_count = 0;
     Vec2 cam_center{0.0f, -5.0f};
@@ -118,7 +119,8 @@ void load_scene() {
         g_state.status = "loaded embedded default scene";
     }
     select_player();
-    g_state.undo.valid = false;
+    g_state.undo_stack.clear();
+    g_state.redo_stack.clear();
 }
 
 void save_scene() {
@@ -145,24 +147,34 @@ void push_transform_to_body(Entity e, bool freeze_velocity) {
     }
 }
 
+// Snapshot an entity's transform BEFORE it is edited; a fresh edit invalidates the
+// redo stack (the classic undo/redo contract).
 void record_undo(Entity e) {
     if (auto* t = g_state.slice->world().ecs().get_component<Transform2D>(e)) {
-        g_state.undo = UndoEntry{e, *t, true};
+        g_state.undo_stack.push_back(UndoEntry{e, *t, true});
+        g_state.redo_stack.clear();
     }
 }
 
-void apply_undo() {
-    if (!g_state.undo.valid || !g_state.slice) { return; }
-    auto* t = g_state.slice->world().ecs().get_component<Transform2D>(g_state.undo.entity);
-    if (t != nullptr) {
-        *t = g_state.undo.xform;
-        push_transform_to_body(g_state.undo.entity, true);
-        g_state.selected = g_state.undo.entity;
-        g_state.has_selection = true;
-        g_state.status = "undo";
-    }
-    g_state.undo.valid = false;
+// Move the current transform onto `to` and restore the snapshot from `from`.
+bool restore_from(std::vector<UndoEntry>& from, std::vector<UndoEntry>& to,
+                  const char* label) {
+    if (from.empty() || !g_state.slice) { return false; }
+    const UndoEntry entry = from.back();
+    from.pop_back();
+    auto* t = g_state.slice->world().ecs().get_component<Transform2D>(entry.entity);
+    if (t == nullptr) { return false; }
+    to.push_back(UndoEntry{entry.entity, *t, true});   // current state -> the other stack
+    *t = entry.xform;                                  // restore the snapshot
+    push_transform_to_body(entry.entity, true);
+    g_state.selected = entry.entity;
+    g_state.has_selection = true;
+    g_state.status = label;
+    return true;
 }
+
+void apply_undo() { restore_from(g_state.undo_stack, g_state.redo_stack, "undo"); }
+void apply_redo() { restore_from(g_state.redo_stack, g_state.undo_stack, "redo"); }
 
 void tick_scene() {
     if (!g_state.slice) { return; }
@@ -442,6 +454,11 @@ void draw_dock_host() {
                 apply_undo();
 #endif
             }
+            if (ImGui::MenuItem("Redo", "Ctrl+Y")) {
+#if defined(OKN_EDITOR_HAS_SCENE)
+                apply_redo();
+#endif
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -468,6 +485,7 @@ void draw_frame() {
 #if defined(OKN_EDITOR_HAS_SCENE)
     tick_scene();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) { apply_undo(); }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) { apply_redo(); }
 #endif
     draw_dock_host();
 
@@ -516,8 +534,44 @@ int run_selftest() {
         return 1;
     }
     const int after = static_cast<int>(b.world().build_sprites().sprite_count());
-    std::fprintf(stderr, "selftest: serialize round-trip before=%d after=%d\n", before, after);
-    return (before > 0 && before == after) ? 0 : 1;
+    const bool serialize_ok = (before > 0 && before == after);
+    std::fprintf(stderr, "selftest: serialize round-trip before=%d after=%d %s\n",
+                 before, after, serialize_ok ? "OK" : "FAIL");
+
+    // Multi-level undo/redo on the real editor state, headless: edit an entity
+    // twice, undo twice, redo once, and check the transform tracks the stacks.
+    bool undo_ok = true;
+    load_scene();
+    if (g_state.slice && g_state.has_selection) {
+        const Entity e = g_state.selected;
+        auto pos = [&]() -> float {
+            auto* t = g_state.slice->world().ecs().get_component<Transform2D>(e);
+            return t ? t->position.x : 0.0f;
+        };
+        auto move_to = [&](float x) {
+            if (auto* t = g_state.slice->world().ecs().get_component<Transform2D>(e)) {
+                t->position.x = x;
+            }
+        };
+        auto approx = [](float p, float q) { const float d = p - q; return d < 1e-3f && d > -1e-3f; };
+
+        const float base = pos();
+        record_undo(e); move_to(base + 1.0f);     // edit 1 -> base+1
+        record_undo(e); move_to(base + 2.0f);     // edit 2 -> base+2
+        apply_undo();   const float u1 = pos();   // expect base+1
+        apply_undo();   const float u2 = pos();   // expect base
+        apply_redo();   const float r1 = pos();   // expect base+1
+        undo_ok = approx(u1, base + 1.0f) && approx(u2, base) && approx(r1, base + 1.0f);
+        std::fprintf(stderr,
+            "selftest: undo/redo base=%.2f undo1=%.2f undo2=%.2f redo1=%.2f %s\n",
+            base, u1, u2, r1, undo_ok ? "OK" : "FAIL");
+    } else {
+        std::fprintf(stderr, "selftest: undo/redo SKIPPED (no scene/selection)\n");
+    }
+
+    const bool ok = serialize_ok && undo_ok;
+    std::fprintf(stderr, "selftest: %s\n", ok ? "EDITOR SELFTEST OK" : "EDITOR SELFTEST FAIL");
+    return ok ? 0 : 1;
 #else
     std::fprintf(stderr, "selftest: scene support not built\n");
     return 0;
