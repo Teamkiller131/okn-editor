@@ -132,11 +132,27 @@ void load_scene() {
         g_state.slice->load_string(kDefaultScene);
         g_state.status = "loaded embedded default scene";
     }
+    using FieldDesc = okn::ecs::ScriptingBridge::FieldDesc;
+    using FT = FieldDesc::Type;
     g_state.bridge = std::make_unique<okn::ecs::ScriptingBridge>(g_state.slice->world().ecs());
-    g_state.bridge->register_component<Transform2D>("Transform2D");
-    g_state.bridge->register_component<SpriteComp>("SpriteComp");
-    g_state.bridge->register_component<BodyComp>("BodyComp");
-    g_state.bridge->register_component<PlayerTag>("PlayerTag");
+    g_state.bridge->register_component<Transform2D>(
+        "Transform2D",
+        {FieldDesc{"pos.x", offsetof(Transform2D, position) + 0, FT::kF32},
+         FieldDesc{"pos.y", offsetof(Transform2D, position) + sizeof(float), FT::kF32},
+         FieldDesc{"rotation", offsetof(Transform2D, rotation), FT::kF32},
+         FieldDesc{"size.x", offsetof(Transform2D, size) + 0, FT::kF32},
+         FieldDesc{"size.y", offsetof(Transform2D, size) + sizeof(float), FT::kF32}});
+    g_state.bridge->register_component<SpriteComp>(
+        "SpriteComp",
+        {FieldDesc{"r", offsetof(SpriteComp, color) + 0, FT::kU8},
+         FieldDesc{"g", offsetof(SpriteComp, color) + 1, FT::kU8},
+         FieldDesc{"b", offsetof(SpriteComp, color) + 2, FT::kU8},
+         FieldDesc{"a", offsetof(SpriteComp, color) + 3, FT::kU8},
+         FieldDesc{"texture_id", offsetof(SpriteComp, texture_id), FT::kU32}});
+    g_state.bridge->register_component<BodyComp>(
+        "BodyComp", {FieldDesc{"body_id", offsetof(BodyComp, body_id), FT::kU32}});
+    g_state.bridge->register_component<PlayerTag>(
+        "PlayerTag", {FieldDesc{"active", offsetof(PlayerTag, active), FT::kBool}});
     select_player();
     g_state.undo_stack.clear();
     g_state.redo_stack.clear();
@@ -379,7 +395,40 @@ void draw_inspector() {
                         .component_data(g_state.selected, name.c_str()));
                 if (ImGui::TreeNode(name.c_str(), "%s  (%zu bytes)", name.c_str(),
                                     static_cast<std::size_t>(desc.size))) {
-                    if (bytes != nullptr && desc.size > 0) {
+                    if (bytes != nullptr && !desc.fields.empty()) {
+                        // Labeled, typed values via the per-field descriptors.
+                        using FT = okn::ecs::ScriptingBridge::FieldDesc::Type;
+                        for (const auto& fd : desc.fields) {
+                            const auto* p = bytes + fd.offset;
+                            switch (fd.type) {
+                                case FT::kF32:
+                                    ImGui::Text("%-10s %.3f", fd.name.c_str(),
+                                                *reinterpret_cast<const float*>(p));
+                                    break;
+                                case FT::kF64:
+                                    ImGui::Text("%-10s %.3f", fd.name.c_str(),
+                                                *reinterpret_cast<const double*>(p));
+                                    break;
+                                case FT::kI32:
+                                    ImGui::Text("%-10s %d", fd.name.c_str(),
+                                                *reinterpret_cast<const std::int32_t*>(p));
+                                    break;
+                                case FT::kU32:
+                                    ImGui::Text("%-10s %u", fd.name.c_str(),
+                                                *reinterpret_cast<const std::uint32_t*>(p));
+                                    break;
+                                case FT::kU8:
+                                    ImGui::Text("%-10s %u", fd.name.c_str(),
+                                                static_cast<unsigned>(*p));
+                                    break;
+                                case FT::kBool:
+                                    ImGui::Text("%-10s %s", fd.name.c_str(),
+                                                *reinterpret_cast<const bool*>(p) ? "true" : "false");
+                                    break;
+                            }
+                        }
+                    } else if (bytes != nullptr && desc.size > 0) {
+                        // Descriptor-less components fall back to a byte preview.
                         const std::size_t n = std::min<std::size_t>(desc.size, 32);
                         std::string hex;
                         hex.reserve(n * 3);
@@ -801,11 +850,15 @@ int run_selftest() {
         std::size_t typed_n = 0;
         for ([[maybe_unused]] auto [qe, qt] : w.query<Transform2D>()) { ++typed_n; }
         const bool query_ok = g_state.bridge->query("Transform2D").size() == typed_n && typed_n > 0;
-        bridge_ok = names_ok && data_ok && query_ok;
+        // Per-field reflection: the named field resolves to the typed member's address.
+        const void* fx = g_state.bridge->field_data(e, "Transform2D", "pos.x");
+        const bool field_ok = fx != nullptr
+                           && fx == &w.get_component<Transform2D>(e)->position.x;
+        bridge_ok = names_ok && data_ok && query_ok && field_ok;
         std::fprintf(stderr,
-            "selftest: reflection names=%d data=%d query=%zu/%zu %s\n",
+            "selftest: reflection names=%d data=%d query=%zu/%zu field=%d %s\n",
             names_ok ? 1 : 0, data_ok ? 1 : 0,
-            g_state.bridge->query("Transform2D").size(), typed_n,
+            g_state.bridge->query("Transform2D").size(), typed_n, field_ok ? 1 : 0,
             bridge_ok ? "OK" : "FAIL");
     } else {
         std::fprintf(stderr, "selftest: reflection SKIPPED (no scene/bridge)\n");
