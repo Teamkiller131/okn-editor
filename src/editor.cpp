@@ -16,9 +16,11 @@
 #include <okn/math/algebra/quat.hpp>
 #include <okn/physics/physics_types.hpp>
 #include <okn/physics/dynamics/body.hpp>
+#include <okn/ecs/scripting/scripting_bridge.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <vector>
 #endif
 
@@ -93,6 +95,10 @@ struct UndoEntry {
 
 struct EditorState {
     std::unique_ptr<LuaSlice> slice;
+    // Name-based reflection over the live World (rebuilt with the slice) — drives the
+    // Inspector's GENERIC component listing, so new registered components appear with
+    // zero editor code. Typed widgets above it stay the editing fast path.
+    std::unique_ptr<okn::ecs::ScriptingBridge> bridge;
     Entity selected{};
     bool has_selection = false;
     bool playing = false;
@@ -118,6 +124,7 @@ void select_player() {
 }
 
 void load_scene() {
+    g_state.bridge.reset();   // the old bridge points at the World being replaced
     g_state.slice = std::make_unique<LuaSlice>();
     if (g_state.slice->load_file("slice_scene.lua")) {
         g_state.status = "loaded slice_scene.lua";
@@ -125,6 +132,11 @@ void load_scene() {
         g_state.slice->load_string(kDefaultScene);
         g_state.status = "loaded embedded default scene";
     }
+    g_state.bridge = std::make_unique<okn::ecs::ScriptingBridge>(g_state.slice->world().ecs());
+    g_state.bridge->register_component<Transform2D>("Transform2D");
+    g_state.bridge->register_component<SpriteComp>("SpriteComp");
+    g_state.bridge->register_component<BodyComp>("BodyComp");
+    g_state.bridge->register_component<PlayerTag>("PlayerTag");
     select_player();
     g_state.undo_stack.clear();
     g_state.redo_stack.clear();
@@ -352,6 +364,39 @@ void draw_inspector() {
             ImGui::Text("body_id    %u", b->body_id);
         }
         if (xform_changed) { push_transform_to_body(g_state.selected, false); }
+
+        // Generic reflection view: every component the ScriptingBridge knows, by name —
+        // components without a typed section above still show up here (read-only bytes;
+        // labeled editing needs the per-field descriptor layer, ROADMAP §12B).
+        if (g_state.bridge) {
+            ImGui::SeparatorText("All components (reflection)");
+            std::map<std::string, okn::ecs::ScriptingBridge::ComponentDesc> sorted(
+                g_state.bridge->descriptors().begin(), g_state.bridge->descriptors().end());
+            for (const auto& [name, desc] : sorted) {
+                if (!g_state.bridge->has_component(g_state.selected, name.c_str())) { continue; }
+                const auto* bytes = static_cast<const std::uint8_t*>(
+                    static_cast<const okn::ecs::ScriptingBridge&>(*g_state.bridge)
+                        .component_data(g_state.selected, name.c_str()));
+                if (ImGui::TreeNode(name.c_str(), "%s  (%zu bytes)", name.c_str(),
+                                    static_cast<std::size_t>(desc.size))) {
+                    if (bytes != nullptr && desc.size > 0) {
+                        const std::size_t n = std::min<std::size_t>(desc.size, 32);
+                        std::string hex;
+                        hex.reserve(n * 3);
+                        for (std::size_t i = 0; i < n; ++i) {
+                            char buf[4];
+                            std::snprintf(buf, sizeof(buf), "%02X ", bytes[i]);
+                            hex += buf;
+                        }
+                        if (desc.size > n) { hex += "..."; }
+                        ImGui::TextDisabled("%s", hex.c_str());
+                    } else {
+                        ImGui::TextDisabled("(empty / tag component)");
+                    }
+                    ImGui::TreePop();
+                }
+            }
+        }
     } else {
         ImGui::TextDisabled("(select an entity in the Hierarchy or Viewport)");
     }
@@ -738,7 +783,35 @@ int run_selftest() {
         std::fprintf(stderr, "selftest: undo/redo SKIPPED (no scene/selection)\n");
     }
 
-    const bool ok = serialize_ok && undo_ok;
+    // Generic reflection (the Inspector's "All components" section runs on this):
+    // the ScriptingBridge must resolve the live scene by NAME — the player entity
+    // reflects its components, component_data matches the typed pointers, and a
+    // name-based query sees every transform the typed query sees.
+    bool bridge_ok = false;
+    if (g_state.slice && g_state.bridge && g_state.slice->world().player().is_valid()) {
+        auto& w = g_state.slice->world().ecs();
+        const Entity e = g_state.slice->world().player();   // fresh — selection may be
+                                                            // stale after the undo tests
+        const bool names_ok = g_state.bridge->registered_count() == 4
+                           && g_state.bridge->has_component(e, "Transform2D")
+                           && g_state.bridge->has_component(e, "PlayerTag");
+        const void* raw = static_cast<const okn::ecs::ScriptingBridge&>(*g_state.bridge)
+                              .component_data(e, "Transform2D");
+        const bool data_ok = raw != nullptr && raw == w.get_component<Transform2D>(e);
+        std::size_t typed_n = 0;
+        for ([[maybe_unused]] auto [qe, qt] : w.query<Transform2D>()) { ++typed_n; }
+        const bool query_ok = g_state.bridge->query("Transform2D").size() == typed_n && typed_n > 0;
+        bridge_ok = names_ok && data_ok && query_ok;
+        std::fprintf(stderr,
+            "selftest: reflection names=%d data=%d query=%zu/%zu %s\n",
+            names_ok ? 1 : 0, data_ok ? 1 : 0,
+            g_state.bridge->query("Transform2D").size(), typed_n,
+            bridge_ok ? "OK" : "FAIL");
+    } else {
+        std::fprintf(stderr, "selftest: reflection SKIPPED (no scene/bridge)\n");
+    }
+
+    const bool ok = serialize_ok && undo_ok && bridge_ok;
     std::fprintf(stderr, "selftest: %s\n", ok ? "EDITOR SELFTEST OK" : "EDITOR SELFTEST FAIL");
     return ok ? 0 : 1;
 #else
