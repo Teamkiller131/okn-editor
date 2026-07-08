@@ -17,6 +17,7 @@
 #include <okn/physics/physics_types.hpp>
 #include <okn/physics/dynamics/body.hpp>
 #include <okn/ecs/scripting/scripting_bridge.hpp>
+#include <okn/asset/formats/scene_importer.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -150,7 +151,8 @@ void load_scene() {
          FieldDesc{"a", offsetof(SpriteComp, color) + 3, FT::kU8},
          FieldDesc{"texture_id", offsetof(SpriteComp, texture_id), FT::kU32}});
     g_state.bridge->register_component<BodyComp>(
-        "BodyComp", {FieldDesc{"body_id", offsetof(BodyComp, body_id), FT::kU32}});
+        "BodyComp", {FieldDesc{"body_id", offsetof(BodyComp, body_id), FT::kU32},
+                     FieldDesc{"kind", offsetof(BodyComp, kind), FT::kU32}});
     g_state.bridge->register_component<PlayerTag>(
         "PlayerTag", {FieldDesc{"active", offsetof(PlayerTag, active), FT::kBool}});
     select_player();
@@ -166,6 +168,11 @@ void save_scene() {
         g_state.status = "saved slice_scene.lua";
     } else {
         g_state.status = "save FAILED";
+    }
+    // The editor also authors the ENGINE format: the live World's EKO1 bytes
+    // (loadable by any SliceWorld via load_scene_eko / okn-asset's SceneImporter).
+    if (g_state.slice->world().save_scene_eko("slice_scene.eko")) {
+        g_state.status += " + slice_scene.eko";
     }
 }
 
@@ -864,7 +871,48 @@ int run_selftest() {
         std::fprintf(stderr, "selftest: reflection SKIPPED (no scene/bridge)\n");
     }
 
-    const bool ok = serialize_ok && undo_ok && bridge_ok;
+    // EKO1 authoring: the editor's Save writes the ENGINE scene format. Round-trip
+    // it the way a game would consume it — save the live World's bytes, import
+    // through okn-asset's SceneImporter (validates the EKO1 header), load into a
+    // FRESH SliceWorld (physics rebuilt from components), and prove the loaded
+    // world both matches and SIMULATES (the player falls + lands on the ground).
+    bool eko_ok = false;
+    if (g_state.slice) {
+        const int n_before = static_cast<int>(g_state.slice->world().ecs().entity_count());
+        const bool saved = g_state.slice->world().save_scene_eko("slice_scene.eko");
+        okn::asset::SceneImporter importer;
+        const okn::asset::SceneData scene = importer.import("slice_scene.eko");
+        SliceWorld fresh;
+        const bool loaded = scene.valid() && fresh.load_scene_eko_bytes(scene.bytes);
+        // Every entity got a live body, and after 4 simulated seconds the player is
+        // SETTLED and SUPPORTED (near-zero fall speed, not tunnelled into the void)
+        // — which only happens if the static geometry was genuinely rebuilt too.
+        const bool bodies_ok = loaded
+            && fresh.physics().body_count() == static_cast<std::size_t>(n_before);
+        bool sim_ok = false;
+        if (bodies_ok && fresh.player().is_valid()) {
+            for (int i = 0; i < 240; ++i) { fresh.update(1.0f / 60.0f); }
+            auto* pt2 = fresh.ecs().get_component<Transform2D>(fresh.player());
+            auto* pb = fresh.ecs().get_component<BodyComp>(fresh.player());
+            if (pt2 != nullptr && pb != nullptr) {
+                if (auto* body = fresh.physics().get_body(pb->body_id)) {
+                    const float vy = body->linear_velocity.y;
+                    sim_ok = pt2->position.y > -100.0f && vy > -0.5f && vy < 0.5f;
+                }
+            }
+        }
+        eko_ok = saved && loaded && bodies_ok
+              && static_cast<int>(fresh.ecs().entity_count()) == n_before && sim_ok;
+        std::fprintf(stderr,
+            "selftest: eko save=%d import=%d(entities=%u) load=%d n=%d/%d bodies=%d settled=%d %s\n",
+            saved ? 1 : 0, scene.valid() ? 1 : 0, scene.entity_count, loaded ? 1 : 0,
+            loaded ? static_cast<int>(fresh.ecs().entity_count()) : -1, n_before,
+            bodies_ok ? 1 : 0, sim_ok ? 1 : 0, eko_ok ? "OK" : "FAIL");
+    } else {
+        std::fprintf(stderr, "selftest: eko SKIPPED (no scene)\n");
+    }
+
+    const bool ok = serialize_ok && undo_ok && bridge_ok && eko_ok;
     std::fprintf(stderr, "selftest: %s\n", ok ? "EDITOR SELFTEST OK" : "EDITOR SELFTEST FAIL");
     return ok ? 0 : 1;
 #else

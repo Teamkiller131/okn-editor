@@ -24,7 +24,7 @@ if(TARGET unigui::unigui)
     if(sol2_FOUND AND LUA_FOUND AND EXISTS "${RENDER_DIR}/slice/lua_slice.cpp")
         # Compile the Lua scene bridge directly (header-only slice + lua_slice.cpp).
         list(APPEND EDITOR_SRC "${RENDER_DIR}/slice/lua_slice.cpp")
-        list(APPEND EDITOR_PUBLIC_LIBS okn-ecs okn-physics sol2::sol2 ${LUA_LIBRARIES})
+        list(APPEND EDITOR_PUBLIC_LIBS okn-ecs okn-physics okn-asset sol2::sol2 ${LUA_LIBRARIES})
         list(APPEND EDITOR_PRIVATE_INC "${RENDER_DIR}/include" "${LUA_INCLUDE_DIR}")
         set(EDITOR_HAS_SCENE ON)
     endif()
